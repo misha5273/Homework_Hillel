@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <map>
+#include <functional>
 
 // ===== Інтерфейси =====
 
@@ -32,13 +34,11 @@ class FileNumberReader : public INumberReader {
 public:
     std::vector<int> read_numbers(const std::string& filename) override {
         std::ifstream file(filename);
-        std::vector<int> numbers;
-
         if (!file) {
-            std::cerr << "Error: Cannot open file " << filename << std::endl;
-            return numbers;
+            throw std::runtime_error("Cannot open file: " + filename);
         }
 
+        std::vector<int> numbers;
         int num;
         while (file >> num) {
             numbers.push_back(num);
@@ -97,25 +97,38 @@ public:
     }
 };
 
-// ===== Фабрика фільтрів =====
+// ===== Фабрика фільтрів через реєстр =====
 
 class FilterFactory {
+    using FactoryFunction = std::function<std::unique_ptr<INumberFilter>(const std::string&)>;
+    std::map<std::string, FactoryFunction> registry;
+
 public:
-    static std::unique_ptr<INumberFilter> create_filter(const std::string& filter_str) {
-        if (filter_str == "EVEN") {
+    FilterFactory() {
+        registry["EVEN"] = [](const std::string&) {
             return std::make_unique<EvenFilter>();
-        } else if (filter_str == "ODD") {
+        };
+        registry["ODD"] = [](const std::string&) {
             return std::make_unique<OddFilter>();
-        } else if (filter_str.rfind("GT", 0) == 0) {
+        };
+        registry["GT"] = [](const std::string& input) {
             int threshold;
-            std::istringstream iss(filter_str.substr(2));
+            std::istringstream iss(input.substr(2));
             if (!(iss >> threshold)) {
-                throw std::invalid_argument("Invalid GT filter format");
+                throw std::invalid_argument("Invalid GT filter format: " + input);
             }
             return std::make_unique<GreaterThanFilter>(threshold);
-        } else {
-            throw std::invalid_argument("Unknown filter: " + filter_str);
+        };
+    }
+
+    std::unique_ptr<INumberFilter> create_filter(const std::string& filter_str) const {
+        for (const auto& [key, factory] : registry) {
+            if (filter_str.rfind(key, 0) == 0) {
+                return factory(filter_str);
+            }
         }
+
+        throw std::invalid_argument("Unknown filter: " + filter_str);
     }
 };
 
@@ -160,10 +173,11 @@ int main(int argc, char* argv[]) {
     std::string filename = argv[2];
 
     try {
-        auto filter = FilterFactory::create_filter(filter_str);
-        FileNumberReader reader;
+        FilterFactory factory;
+        auto filter = factory.create_filter(filter_str);
 
-PrintObserver printObserver;
+        FileNumberReader reader;
+        PrintObserver printObserver;
         CountObserver countObserver;
         std::vector<INumberObserver*> observers = { &printObserver, &countObserver };
 
